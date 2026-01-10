@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Salience-Gated Aggregation + Log-Domain Arithmetic</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Newsreader:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body>
+  <div class="progress" id="progress"></div>
+  <div class="page">
+    <header class="hero card">
+      <p class="eyebrow">Thought experiment</p>
+      <h1>Salience-Gated Aggregation + Log-Domain Arithmetic</h1>
+      <p class="subtitle">
+        A curious, rigorous exploration by a third-year B.Tech student. The question: can competitive “salience selection” plus log-domain arithmetic reduce dense summation (and potentially energy) without breaking too many tasks?
+      </p>
+      <div class="chips">
+        <span class="chip">Salience gating</span>
+        <span class="chip">Tournament selection</span>
+        <span class="chip">Logarithmic Number System (LNS)</span>
+        <span class="chip">Logarithmic Computation Domain (LCD)</span>
+      </div>
+      <div class="callout compact">
+        <p><strong>Up-front caveats</strong></p>
+        <ul>
+          <li>This is not a claim that this replaces Transformers or that it is biologically accurate.</li>
+          <li>GPUs are optimized for dense matrix multiplication; benefits may require co-design or structured sparsity.</li>
+          <li>Memory movement often dominates energy, so fewer operations does not automatically mean lower power.</li>
+        </ul>
+      </div>
+      <nav class="toc" aria-label="Table of contents">
+        <p class="toc-title">Quick navigation</p>
+        <div class="toc-links">
+          <a href="#overview">Overview</a>
+          <a href="#motivation">Motivation</a>
+          <a href="#baseline">Baseline</a>
+          <a href="#proposed">Proposed idea</a>
+          <a href="#regularization">Overfitting bias</a>
+          <a href="#pseudocode">Pseudocode</a>
+          <a href="#log-domain">Log-domain</a>
+          <a href="#complexity">Complexity</a>
+          <a href="#energy">Energy</a>
+          <a href="#where-work">Where it might work</a>
+          <a href="#where-fail">Where it fails</a>
+          <a href="#experiments">Minimal experiments</a>
+          <a href="#related">Related work</a>
+          <a href="#conclusion">Conclusion</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="content card">
+      <section id="overview">
+        <h2>Overview</h2>
+        <p>Modern Transformer models are built around a clean but expensive assumption: every token should softly attend to every other token, and evidence should be integrated by weighted summation. This post explores an alternative inductive bias: replace dense summation with competitive, salience-driven selection.</p>
+        <p>The proposed mechanism is a tournament-style reducer. It compares two candidates at a time, keeps a clearly dominant one (an “anomalous” signal), and collapses near-equal candidates as equivalent. Because the tournament order matters, an optional bootstrapping step runs multiple tournaments with random pairings and interprets winner frequency as confidence, including a possible no-winner outcome.</p>
+        <p>Separately, as a systems thought experiment, I also consider the Logarithmic Computation Domain (LCD) and the Logarithmic Number System (LNS): in log space, multiplication becomes addition. Normally, summation still costs extra (log-sum-exp), but this idea intentionally avoids summation by doing competitive selection instead. That makes the model class more “winner-take-most,” which is a real trade-off, not a free upgrade.</p>
+      </section>
+
+      <section id="motivation">
+        <h2>Motivation: Why Dense Summation Feels Wasteful</h2>
+        <blockquote>
+          <p>Every token should softly attend to every other token, and all evidence should be integrated by weighted summation.</p>
+        </blockquote>
+        <p>This design is mathematically neat and works well, but it has two consequences:</p>
+        <ul>
+          <li><strong>High computational cost:</strong> weak or redundant interactions are still processed with dense arithmetic.</li>
+          <li><strong>Uniform treatment of relevance:</strong> near-equivalent signals still get accumulated even when they add little new information.</li>
+        </ul>
+        <p>An intuition (not a biological claim) is that humans often behave differently: ignore most signals most of the time, commit early to salient interpretations, and revise mainly when something clearly anomalous appears.</p>
+        <p>That motivates a different question: instead of “how much does everything contribute?”, ask “is anything dominant enough to matter?”</p>
+      </section>
+
+      <section id="baseline">
+        <h2>Baseline: What a Standard Transformer Layer Computes</h2>
+        <p><strong>Notation:</strong> \(n\) = sequence length (tokens), \(d\) = model width.</p>
+        <p>A simplified attention block (single head) is:</p>
+        <p class="equation">\[
+Q = XW_Q,\quad K = XW_K,\quad V = XW_V,\quad
+A = \operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt d}\right),\quad
+Y = AV.
+\]</p>
+        <ul>
+          <li><strong>Dense projections:</strong> multiplying \(X \in \mathbb{R}^{n \times d}\) by \(W \in \mathbb{R}^{d \times d}\) costs \(O(n d^2)\). This includes \(Q,K,V\) and the feed-forward network.</li>
+          <li><strong>Attention interactions:</strong> computing \(QK^\top\) costs \(O(n^2 d)\). Applying the weights to values (\(AV\)) is also \(O(n^2 d)\) (same order). Softmax itself is \(O(n^2)\) but usually not the bottleneck.</li>
+          <li><strong>Why people say “\(O(n^2)\)”:</strong> for long context, the \(n^2 d\) term dominates, so attention becomes the scalability bottleneck.</li>
+        </ul>
+      </section>
+
+      <section id="proposed">
+        <h2>Proposed Idea: Salience-Gated Aggregation</h2>
+        <p><strong>Conceptual shift:</strong> replace integration with competition. Softmax attention asks “how much does each token contribute?” and then adds everything. Salience gating asks “is any signal clearly dominant?” and then selects.</p>
+        <p>Assume we have candidates \((s_i, v_i)\) where \(s_i &gt; 0\) is a salience score and \(v_i\) is a value vector. Compare two candidates at a time with a ratio threshold \(\tau &gt; 1\) and a small \(\epsilon &gt; 0\) for stability:</p>
+        <p class="equation">\[
+\operatorname{win}_\tau(a, b) = \begin{cases}
+a & \frac{s_a}{s_b + \epsilon} \ge \tau \\
+b & \frac{s_b}{s_a + \epsilon} \ge \tau \\
+\text{tie} & \text{otherwise}
+\end{cases}
+\]</p>
+        <ul>
+          <li>If one score is sufficiently larger, keep it (treat as salient or anomalous).</li>
+          <li>If scores are close, treat them as approximately equivalent and keep one representative. This introduces order dependence.</li>
+          <li>Optional normalization can rescale the kept score (for example, keep \(\max(s_a, s_b)\)); this choice affects bias.</li>
+        </ul>
+        <p><strong>Tournament reduction:</strong> shuffle candidates, compare them in pairs, keep survivors, and repeat until one remains.</p>
+        <p><strong>Optional bootstrapping:</strong> run \(B\) tournaments with different random pairings. Use winner frequency as a confidence signal and allow a no-winner outcome when nothing consistently dominates. As a loose analogy, this resembles repeated glimpses: consistency creates confidence; noise alone does not. A practical “no-winner” fallback could be a skip connection (keep the current token representation) or keeping multiple candidates instead of forcing one.</p>
+        <p>As an attention replacement, one interpretation is: for each query token \(i\), compute positive scores \(s_{i,1..n}\) against keys, then output the winning (or top-k) value instead of \(y_i = \sum_j \alpha_{i,j} v_j\).</p>
+        <p>This approach explicitly accepts that many details will be discarded and representations may collapse early. That can be a feature in redundant settings, and a failure mode when many weak cues must accumulate.</p>
+        <div class="callout">
+          <p><strong>Trade-off (explicit)</strong></p>
+          <ul>
+            <li><strong>Potential upside:</strong> redundancy collapses early; weak signals can be ignored; aggregation avoids dense summation.</li>
+            <li><strong>Likely downside:</strong> many tasks need many weak cues to accumulate; hard selection can lose nuance and be harder to optimize.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="regularization">
+        <h2>Implicit Regularization: Competition vs Frequency</h2>
+        <p>One reason I like this direction is that it may act as a strong anti-overfitting bias in a specific way: it suppresses frequency-based reinforcement of weak, correlated signals. This is not a magic fix for overfitting; it works by changing what the model is allowed to represent and how evidence is combined.</p>
+        <p><strong>Why dense summation can over-count weak evidence:</strong> in softmax attention, each output is a weighted sum \(y_i = \sum_j \alpha_{i,j} v_j\). If a weak but correlated feature appears many times (for example, a particular keyword that often shows up in positive training sentences), its contribution can reinforce itself across repeated occurrences. In the extreme, many small aligned terms can overwhelm a few strong but rare signals.</p>
+        <p><strong>What competition changes:</strong> in a tournament, repetition does not automatically become confidence. Similar tokens compete, and only a small set of winners survives. A keyword that appears ten times does not get “ten votes” by default; it only matters if it consistently wins against alternatives.</p>
+        <p><strong>Bootstrapping as stability:</strong> running \(B\) tournaments with random pairings turns “winning once” into “winning consistently.” Robust signals should win across many resamplings; brittle, context-dependent cues should fluctuate. In this view, the winner frequency is closer to a stability-based confidence than an additive score.</p>
+        <blockquote>
+          <p>A mental model: rereading a paragraph multiple times often produces slightly different candidate interpretations; the interpretation that keeps winning becomes the one you trust. This is only an analogy, but it matches the idea of bootstrap consensus under competition.</p>
+        </blockquote>
+        <div class="callout">
+          <p><strong>A crisp technical way to say it</strong></p>
+          <p>By replacing additive aggregation with competitive selection and bootstrap consensus, the model suppresses frequency-based reinforcement and enforces stability-based salience, which can act as an implicit regularizer against spurious correlations.</p>
+        </div>
+        <p><strong>Honesty check:</strong> the same mechanism that can reduce spurious keyword bias can also remove useful weak cues. In other words, you trade representational richness for robustness. If a task truly needs accumulation of many small signals, hard selection is likely to underperform unless you soften it (for example, keep top-k winners, allow ties to keep multiple candidates, or mix a small amount of summation back in).</p>
+      </section>
+
+      <section id="pseudocode">
+        <h3>Pseudocode sketches</h3>
+        <pre><code class="language-pseudo">function TournamentReduce(scores, values, tau, epsilon):
+    # scores are positive; values are vectors; tau > 1; epsilon > 0
+    candidates = []
+    for i in 1..N:
+        candidates.append((i, scores[i], values[i], false))  # false = no decisive win yet
+    shuffle(candidates)
+
+    while length(candidates) > 1:
+        next_round = []
+        while candidates not empty:
+            (ia, sa, va, da) = pop(candidates)
+            if candidates empty:
+                next_round.append((ia, sa, va, da))
+                break
+
+            (ib, sb, vb, db) = pop(candidates)
+
+            if sa / (sb + epsilon) >= tau:
+                next_round.append((ia, sa, va, true))
+            elif sb / (sa + epsilon) >= tau:
+                next_round.append((ib, sb, vb, true))
+            else:
+                # tie: keep one representative (order-dependent)
+                if sa >= sb:
+                    next_round.append((ia, sa, va, da or db))
+                else:
+                    next_round.append((ib, sb, vb, da or db))
+        candidates = next_round
+
+    (i*, s*, v*, decisive) = candidates[0]
+    if decisive == false:
+        return ("no_winner", null)
+    return ("winner", i*)</code></pre>
+
+        <pre><code class="language-pseudo">function BootstrapSalience(scores, values, B, gamma):
+    # gamma in [0, 1] is the minimum win-rate to accept a winner
+    # tau and epsilon are fixed hyperparameters for the layer (not shown)
+    win_counts = zeros_like(scores)
+
+    for b in 1..B:
+        (tag, idx) = TournamentReduce(scores, values, tau, epsilon)
+        if tag == "winner":
+            win_counts[idx] += 1
+
+    confidences = win_counts / B
+    best = argmax(confidences)
+
+    if confidences[best] >= gamma:
+        return ("winner", best, confidences)
+    return ("no_winner", null, confidences)</code></pre>
+      </section>
+
+      <section id="log-domain">
+        <h2>Adding Log-Domain Arithmetic (LCD/LNS Intuition)</h2>
+        <p>In the Logarithmic Number System (LNS), a positive number \(a\) is represented by its logarithm \(x = \log a\). This changes the cost profile of basic operations:</p>
+        <ul>
+          <li><strong>Multiply:</strong> \(\log(a \cdot b) = \log a + \log b\) (addition in log space).</li>
+          <li><strong>Divide:</strong> \(\log(a / b) = \log a - \log b\) (subtraction in log space).</li>
+          <li><strong>Compare:</strong> compare \(\log a\) and \(\log b\) directly.</li>
+        </ul>
+        <p>Summation is the hard part. In log space, \(\log(a + b)\) becomes a \(\max\) plus a correction term (a log-sum-exp form), which is typically implemented with approximations or lookup tables.</p>
+        <p>This thought experiment leans into that: it intentionally avoids summation by using competitive selection. That can be attractive for efficiency, but it also changes the model class toward a more “tropical-ish” behavior where large signals dominate and small ones vanish. Whether that bias helps or hurts depends on the task.</p>
+      </section>
+
+      <section id="complexity">
+        <h2>Complexity Comparison</h2>
+        <p><strong>Standard Transformer per layer:</strong> \(O(n^2 d + n d^2)\).</p>
+        <p><strong>Proposed model per layer:</strong> \(O(n d^2 + B n^2)\) if projections remain dense and attention uses \(B\) bootstrapped tournaments.</p>
+        <div class="callout">
+          <p><strong>Important caveat</strong></p>
+          <p>If you still compute scores as \(q_i \cdot k_j\) in \(d\) dimensions, you still pay \(O(n^2 d)\). In that case, tournaments only replace the final weighted summation, not the expensive score computation.</p>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th>Standard Transformer</th>
+              <th>Salience + tournaments</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Projections / MLP</td>
+              <td>\(O(n d^2)\)</td>
+              <td>\(O(n d^2)\) (unless you add sparsity / low-rank / routing)</td>
+            </tr>
+            <tr>
+              <td>Token-token interactions</td>
+              <td>\(O(n^2 d)\)</td>
+              <td>\(O(B n^2)\) comparisons (plus score-computation cost)</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>When the scoring cost is genuinely small, the quadratic interaction term changes from \(n^2 d\) to \(B n^2\), which is a factor of roughly \(d / B\) in that part of the layer (assuming \(B \ll d\)).</p>
+        <p>To reduce \(n d^2\) further, you would still need sparsity, low-rank factors, or routing; tournaments do not remove dense projections by themselves.</p>
+      </section>
+
+      <section id="energy">
+        <h2>Energy Intuition (Without Overclaiming)</h2>
+        <p>Big-O counts operations; energy depends on operation type (multiply vs add vs compare), precision, and especially memory access and data movement. In many real systems, moving tensors dominates energy.</p>
+        <p>Why this might save energy in the right implementation:</p>
+        <ul>
+          <li><strong>Arithmetic simplification:</strong> multiplications can become additions in log space; aggregation becomes compare-and-select instead of accumulate-and-normalize.</li>
+          <li><strong>Reduced intermediate state:</strong> a streaming tournament can avoid materializing full attention weights and large partial sums, reducing memory traffic.</li>
+          <li><strong>Parallel bootstrapping:</strong> \(B\) tournaments can run independently (embarrassingly parallel), though they still cost extra comparisons.</li>
+        </ul>
+        <p><strong>Hardware caveat:</strong> GPUs are optimized for dense matrix multiplication. Irregular tournaments can reduce utilization, and any benefit may require co-design (for example, LNS-friendly datapaths) or structured sparsity so the computation still maps efficiently.</p>
+      </section>
+
+      <section id="where-work">
+        <h2>Where This Might Work</h2>
+        <p>Language and perception are often redundant: many inputs express the same meaning with slightly different phrasing. This idea assumes a lot of that redundancy can be collapsed, and that anomalies deserve attention more than averages.</p>
+        <ul>
+          <li>Long-context settings where only a few tokens are truly relevant and the rest are distractors.</li>
+          <li>Highly redundant language (paraphrases, templates, summaries) where collapsing near-equivalent signals is acceptable.</li>
+          <li>Anomaly detection or “alerting” behavior where one outlier should dominate rather than be averaged away.</li>
+          <li>Routing and gating modules (for example, choosing experts or retrieved chunks) where selection is already the goal.</li>
+          <li>Early perception / filtering layers where a fast “keep the salient bits” front-end is useful.</li>
+          <li>Energy-constrained systems where co-designed hardware and structured sparsity are realistic.</li>
+        </ul>
+      </section>
+
+      <section id="where-fail">
+        <h2>Where This Will Probably Fail</h2>
+        <ul>
+          <li>Tasks requiring accumulation of many weak signals (the opposite of winner-take-most).</li>
+          <li>Fine-grained numerical reasoning where small contributions must add up correctly.</li>
+          <li>Situations where ties are common; order dependence can turn into noise or bias.</li>
+          <li>Optimization stability: hard selection can create sparse or discontinuous gradients unless relaxed or trained carefully.</li>
+          <li>Hardware reality: if tournaments become branchy, memory-heavy, or poorly vectorized, they can be slower and less efficient than dense kernels.</li>
+        </ul>
+      </section>
+
+      <section id="experiments">
+        <h2>Minimal Experiments to Test the Hypothesis</h2>
+        <div class="callout">
+          <p><strong>Toy attention replacement</strong></p>
+          <ul>
+            <li>Goal: Compare dense softmax attention vs tournament selection on a synthetic copy-or-select task.</li>
+            <li>Setup: Sequence of one salient token plus distractors; measure retrieval of the salient value.</li>
+            <li>Metric: Accuracy of selecting the correct token; wall-clock time if possible.</li>
+            <li>Expected: Similar accuracy at small \(B\) if salience is clear; slight speedup only if implementation is efficient.</li>
+            <li>Falsifier: Accuracy drops sharply or runtime grows due to irregular control flow.</li>
+          </ul>
+        </div>
+        <div class="callout">
+          <p><strong>Spurious keyword correlation stress-test</strong></p>
+          <ul>
+            <li>Goal: Test whether tournament selection reduces frequency-based keyword overfitting.</li>
+            <li>Setup: Create a dataset where the label depends on a “true” semantic cue, but a confounder keyword is highly correlated with the label in training and then flipped or removed in testing.</li>
+            <li>Metric: Accuracy on the counterfactual test split; selection frequency of the confounder token as an interpretability proxy.</li>
+            <li>Expected: Dense summation models over-rely on the confounder; tournament + bootstrapping relies less on repetition and generalizes better under the correlation shift.</li>
+            <li>Falsifier: The tournament model still locks onto the confounder (or accuracy drops more), suggesting competition does not prevent spurious correlations in practice.</li>
+          </ul>
+        </div>
+        <div class="callout">
+          <p><strong>Paraphrase-style redundancy</strong></p>
+          <ul>
+            <li>Goal: Check whether tournaments collapse paraphrases similarly to softmax.</li>
+            <li>Setup: Tokens contain repeated paraphrases with minor perturbations.</li>
+            <li>Metric: Variance of selected token identity; semantic similarity of the chosen representation.</li>
+            <li>Expected: Low variance when paraphrases are near-equal; one representative survives.</li>
+            <li>Falsifier: High variance or consistent loss of important variants.</li>
+          </ul>
+        </div>
+        <div class="callout">
+          <p><strong>Stability vs bootstraps</strong></p>
+          <ul>
+            <li>Goal: See how increasing \(B\) affects stability and accuracy.</li>
+            <li>Setup: Same synthetic task; vary \(B \in \{1, 2, 4, 8\}\).</li>
+            <li>Metric: Accuracy and variance across seeds.</li>
+            <li>Expected: Accuracy and stability improve then saturate; beyond a point, returns diminish.</li>
+            <li>Falsifier: No stability gain or accuracy degradation as \(B\) grows (suggesting overfitting to noise).</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="related">
+        <h2>Notes on Related Work (Short)</h2>
+        <ul>
+          <li>Arnold &amp; Chester et al., 2020: Approximate tableless training for LNS to avoid large lookup tables. Inspired the feasibility of training with log-domain primitives.</li>
+          <li>Miyashita et al., 2016: Convolutional Neural Networks with logarithmic representation to cut multiply cost; shows accuracy can survive log quantization.</li>
+          <li>Zhao et al., 2022 (LNS-Madam): Log-domain training method with adaptive momentum; demonstrates optimizer compatibility with LNS.</li>
+          <li>Haghi et al., 2024: Large Language Models with LNS dynamic formats and architecture co-design; argues for joint hardware-model tuning.</li>
+          <li>Kosheleva et al., 2024: Theoretical arguments for LNS optimality under certain noise models; provides motivation for log-domain efficiency.</li>
+        </ul>
+      </section>
+
+      <section id="conclusion">
+        <h2>Conclusion</h2>
+        <p>Transformers optimize universal integration: mix everything, everywhere, smoothly. This thought experiment explores selective cognition: let salient signals win, collapse redundancy early, and avoid dense summation when possible.</p>
+        <div class="callout">
+          <p><strong>What this is — and is not</strong></p>
+          <ul>
+            <li><strong>This is:</strong> an exploration of inductive bias plus a systems-level hypothesis that should be tested on small, controlled tasks.</li>
+            <li><strong>This is not:</strong> a claim that it replaces Transformers, that it is automatically faster on GPUs, or that it is biologically accurate.</li>
+          </ul>
+        </div>
+        <p>The value (to me) is making the trade-off explicit and testable: efficiency and early commitment versus smooth accumulation and nuance. If minimal experiments falsify it, that is still a useful outcome.</p>
+        <p class="personal-note">Personal note: This is a thought experiment from a student who is trying to learn by writing. I am not claiming superiority over Transformers, just exploring a direction that could be wrong. Feedback—especially critical feedback—is welcome.</p>
+      </section>
+    </main>
+  </div>
+
+  <script src="script.js" defer></script>
+</body>
+</html>
