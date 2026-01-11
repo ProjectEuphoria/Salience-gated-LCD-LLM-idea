@@ -140,4 +140,4 @@ function BootstrapSalience(scores, values, B, gamma):
 ## Conclusion
 Salience-gated tournaments plus log-domain arithmetic are an attempt to make “pay only for salient interactions” precise. The approach keeps quadratic attention complexity but may shift constants and energy use if paired with the right sparsity and hardware. It also changes the model class toward competitive selection, which can drop nuance.
 
-Personal note: This is a thought experiment from a student who is trying to learn by writing. I am not claiming superiority over Transformers, just exploring a direction that could be wrong. Feedback, especially critical feedback, is very welcome.
+Personal note: This is a thought experiment from a student who is trying to learn by writing. I am not claiming superiority over Transformers, just exploring a direction that could be wrong. Feedback, especially critical feedback, is very welcome
