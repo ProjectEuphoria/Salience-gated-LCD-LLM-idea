@@ -17,7 +17,7 @@
       <p class="eyebrow">Thought experiment</p>
       <h1>Salience-Gated Aggregation + Log-Domain Arithmetic</h1>
       <p class="subtitle">
-        A curious, rigorous exploration by a third-year B.Tech student. The question: can competitive “salience selection” plus log-domain arithmetic reduce dense summation (and potentially energy) without breaking too many tasks?
+        A curious, rigorous exploration . The question: can competitive “salience selection” plus log-domain arithmetic reduce dense summation (and potentially energy) without breaking too many tasks?
       </p>
       <div class="chips">
         <span class="chip">Salience gating</span>
@@ -28,7 +28,7 @@
       <div class="callout compact">
         <p><strong>Up-front caveats</strong></p>
         <ul>
-          <li>This is not a claim that this replaces Transformers or that it is biologically accurate.</li>
+          <li>This is not a claim that this replaces Transformers .</li>
           <li>GPUs are optimized for dense matrix multiplication; benefits may require co-design or structured sparsity.</li>
           <li>Memory movement often dominates energy, so fewer operations does not automatically mean lower power.</li>
         </ul>
@@ -90,6 +90,23 @@ Y = AV.
           <li><strong>Attention interactions:</strong> computing \(QK^\top\) costs \(O(n^2 d)\). Applying the weights to values (\(AV\)) is also \(O(n^2 d)\) (same order). Softmax itself is \(O(n^2)\) but usually not the bottleneck.</li>
           <li><strong>Why people say “\(O(n^2)\)”:</strong> for long context, the \(n^2 d\) term dominates, so attention becomes the scalability bottleneck.</li>
         </ul>
+        <div class="callout">
+          <p><strong>Token-Centric Redundency Problem</strong></p>
+          <p>
+            Transformer-based language models primarily operate at the token level, assigning contextualized
+            representations to individual tokens rather than explicitly encoding the underlying semantic intent
+            of an utterance.
+            <br/><br/>
+            For example:
+            <ul>
+              <li>I killed a snake.</li>
+              <li>The snake was killed by me.</li>
+            </ul>
+            Although both sentences are semantically equivalent, they differ syntactically. As a result,
+            the model produces distinct internal representations for each, yielding different attention
+            patterns and embedding matrices despite conveying the same core meaning. Hence even though Transformers are as of today best models when it comes to pattern recognition , They are still far from AGI level intelligence 
+          </p>
+        </div>
       </section>
 
       <section id="proposed">
@@ -237,7 +254,7 @@ b & \frac{s_b}{s_a + \epsilon} \ge \tau \\
       </section>
 
       <section id="energy">
-        <h2>Energy Intuition (Without Overclaiming)</h2>
+        <h2>Energy Intuition</h2>
         <p>Big-O counts operations; energy depends on operation type (multiply vs add vs compare), precision, and especially memory access and data movement. In many real systems, moving tensors dominates energy.</p>
         <p>Why this might save energy in the right implementation:</p>
         <ul>
@@ -258,7 +275,7 @@ b & \frac{s_b}{s_a + \epsilon} \ge \tau \\
           <li>Routing and gating modules (for example, choosing experts or retrieved chunks) where selection is already the goal.</li>
           <li>Early perception / filtering layers where a fast “keep the salient bits” front-end is useful.</li>
           <li>Energy-constrained systems where co-designed hardware and structured sparsity are realistic.</li>
-        </ul>
+                  </ul>
       </section>
 
       <section id="where-fail">
