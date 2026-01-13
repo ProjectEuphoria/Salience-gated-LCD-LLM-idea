@@ -93,22 +93,13 @@ Y = AV.
         </ul>
         <div class="callout">
           <p><strong>Token-Centric Redundancy Problem</strong></p>
-          <p>
-            Transformer-based language models primarily operate at the token level, assigning contextualized
-            representations to individual tokens rather than explicitly encoding the underlying semantic intent
-            of an utterance.
-            <br/><br/>
-            For example:
-            <ul>
-              <li>I killed a snake.</li>
-              <li>The snake was killed by me.</li>
-            </ul>
-            Although both sentences are semantically equivalent, they differ syntactically. As a result,
-            the model produces distinct internal representations for each, yielding different attention
-            patterns and embedding matrices despite conveying the same core meaning. This is a simple example
-            of surface-form sensitivity: paraphrases can induce different token-level interactions even when the
-            intended meaning is invariant.
-          </p>
+          <p>Transformer-based language models primarily operate at the token level, assigning contextualized representations to individual tokens rather than explicitly encoding the underlying semantic intent of an utterance.</p>
+          <p>For example:</p>
+          <ul>
+            <li>I killed a snake.</li>
+            <li>The snake was killed by me.</li>
+          </ul>
+          <p>Although both sentences are semantically equivalent, they differ syntactically. As a result, the model produces distinct internal representations for each, yielding different attention patterns and embedding matrices despite conveying the same core meaning. This is a simple example of surface-form sensitivity: paraphrases can induce different token-level interactions even when the intended meaning is invariant.</p>
         </div>
       </section>
 
