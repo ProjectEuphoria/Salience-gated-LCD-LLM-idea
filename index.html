@@ -47,6 +47,7 @@
           <a href="#energy">Energy</a>
           <a href="#where-work">Where it might work</a>
           <a href="#where-fail">Where it fails</a>
+          <a href="#agi">AGI angle</a>
           <a href="#experiments">Minimal experiments</a>
           <a href="#related">Related work</a>
           <a href="#conclusion">Conclusion</a>
@@ -91,7 +92,7 @@ Y = AV.
           <li><strong>Why people say “\(O(n^2)\)”:</strong> for long context, the \(n^2 d\) term dominates, so attention becomes the scalability bottleneck.</li>
         </ul>
         <div class="callout">
-          <p><strong>Token-Centric Redundency Problem</strong></p>
+          <p><strong>Token-Centric Redundancy Problem</strong></p>
           <p>
             Transformer-based language models primarily operate at the token level, assigning contextualized
             representations to individual tokens rather than explicitly encoding the underlying semantic intent
@@ -104,7 +105,9 @@ Y = AV.
             </ul>
             Although both sentences are semantically equivalent, they differ syntactically. As a result,
             the model produces distinct internal representations for each, yielding different attention
-            patterns and embedding matrices despite conveying the same core meaning. Hence even though Transformers are as of today best models when it comes to pattern recognition , They are still far from AGI level intelligence 
+            patterns and embedding matrices despite conveying the same core meaning. This is a simple example
+            of surface-form sensitivity: paraphrases can induce different token-level interactions even when the
+            intended meaning is invariant.
           </p>
         </div>
       </section>
@@ -112,7 +115,21 @@ Y = AV.
       <section id="proposed">
         <h2>Proposed Idea: Salience-Gated Aggregation</h2>
         <p><strong>Conceptual shift:</strong> replace integration with competition. Softmax attention asks “how much does each token contribute?” and then adds everything. Salience gating asks “is any signal clearly dominant?” and then selects.</p>
-        <p>Assume we have candidates \((s_i, v_i)\) where \(s_i &gt; 0\) is a salience score and \(v_i\) is a value vector. Compare two candidates at a time with a ratio threshold \(\tau &gt; 1\) and a small \(\epsilon &gt; 0\) for stability:</p>
+        <div class="callout compact">
+          <p><strong>Concrete salience definition</strong></p>
+          <ul>
+            <li><strong>Not:</strong> token frequency, token count, embedding norm, or “raw attention weight.”</li>
+            <li><strong>Salience (here):</strong> outcome-conditioned influence — a candidate is salient if selecting it reliably improves the task objective.</li>
+          </ul>
+          <p class="equation">\[
+\mathrm{Sal}(j \mid c) := \mathbb{E}\!\left[r \mid j \text{ is selected in context } c\right], \quad
+r = -L(\hat y, y)\ \text{(or } r=\mathbf{1}[\hat y=y]\text{)}.
+\]</p>
+          <p>In an attention-style layer, the context \(c\) can be the current query token \(i\) (so you learn \(s_{i,j}\) rather than a single global \(s_j\)).</p>
+          <p>Intuitively: across many randomized reductions (bootstraps), a token is salient if it keeps “showing up” in low-loss / correct outcomes.</p>
+          <p>At inference time we do not know \(y\), so we use a learned salience head to predict a positive score \(s\) that approximates this influence (for example \(s_j = \operatorname{softplus}(g_\theta(h_j))\), or a query-conditioned variant \(s_{i,j}=\operatorname{softplus}(g_\theta(h_i, h_j))\)). In the LCD framing, \(h\) is constant-width (log-domain) state, not a width-\(d\) vector.</p>
+        </div>
+        <p>Assume we have candidates \((s_i, v_i)\) where \(s_i &gt; 0\) is this predicted salience score and \(v_i\) is the associated payload (for example: a token index, a pointer to retrieved content, or constant-width state). The tournament only uses the scores; the payload just follows the winner. Compare two candidates at a time with a ratio threshold \(\tau &gt; 1\) and a small \(\epsilon &gt; 0\) for stability:</p>
         <p class="equation">\[
 \operatorname{win}_\tau(a, b) = \begin{cases}
 a & \frac{s_a}{s_b + \epsilon} \ge \tau \\
@@ -127,7 +144,7 @@ b & \frac{s_b}{s_a + \epsilon} \ge \tau \\
         </ul>
         <p><strong>Tournament reduction:</strong> shuffle candidates, compare them in pairs, keep survivors, and repeat until one remains.</p>
         <p><strong>Optional bootstrapping:</strong> run \(B\) tournaments with different random pairings. Use winner frequency as a confidence signal and allow a no-winner outcome when nothing consistently dominates. As a loose analogy, this resembles repeated glimpses: consistency creates confidence; noise alone does not. A practical “no-winner” fallback could be a skip connection (keep the current token representation) or keeping multiple candidates instead of forcing one.</p>
-        <p>As an attention replacement, one interpretation is: for each query token \(i\), compute positive scores \(s_{i,1..n}\) against keys, then output the winning (or top-k) value instead of \(y_i = \sum_j \alpha_{i,j} v_j\).</p>
+        <p>As an attention replacement, one interpretation is: for each query token \(i\), compute positive scores \(s_{i,1..n}\) against keys (in LCD, this can be constant-width), then route the winning (or top-k) payload instead of \(y_i = \sum_j \alpha_{i,j} v_j\).</p>
         <p>This approach explicitly accepts that many details will be discarded and representations may collapse early. That can be a feature in redundant settings, and a failure mode when many weak cues must accumulate.</p>
         <div class="callout">
           <p><strong>Trade-off (explicit)</strong></p>
@@ -157,7 +174,7 @@ b & \frac{s_b}{s_a + \epsilon} \ge \tau \\
       <section id="pseudocode">
         <h3>Pseudocode sketches</h3>
         <pre><code class="language-pseudo">function TournamentReduce(scores, values, tau, epsilon):
-    # scores are positive; values are vectors; tau > 1; epsilon > 0
+    # scores are positive; values are payloads; tau > 1; epsilon > 0
     candidates = []
     for i in 1..N:
         candidates.append((i, scores[i], values[i], false))  # false = no decisive win yet
@@ -223,34 +240,31 @@ b & \frac{s_b}{s_a + \epsilon} \ge \tau \\
       <section id="complexity">
         <h2>Complexity Comparison</h2>
         <p><strong>Standard Transformer per layer:</strong> \(O(n^2 d + n d^2)\).</p>
-        <p><strong>Proposed model per layer:</strong> \(O(n d^2 + B n^2)\) if projections remain dense and attention uses \(B\) bootstrapped tournaments.</p>
-        <div class="callout">
-          <p><strong>Important caveat</strong></p>
-          <p>If you still compute scores as \(q_i \cdot k_j\) in \(d\) dimensions, you still pay \(O(n^2 d)\). In that case, tournaments only replace the final weighted summation, not the expensive score computation.</p>
-        </div>
+        <p><strong>Proposed model per layer (LCD version):</strong> \(O(B n^2)\) token-token comparisons plus \(O(n)\) constant-width per-token work (no \(d\)-dimensional projections and no \(d\)-dimensional aggregation).</p>
+
         <table>
           <thead>
             <tr>
               <th>Component</th>
               <th>Standard Transformer</th>
-              <th>Salience + tournaments</th>
+              <th>Salience + tournaments (LCD)</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td>Projections / MLP</td>
               <td>\(O(n d^2)\)</td>
-              <td>\(O(n d^2)\) (unless you add sparsity / low-rank / routing)</td>
+              <td>\(O(n)\) constant-width updates (no dense \(d \times d\) projections)</td>
             </tr>
             <tr>
               <td>Token-token interactions</td>
               <td>\(O(n^2 d)\)</td>
-              <td>\(O(B n^2)\) comparisons (plus score-computation cost)</td>
+              <td>\(O(B n^2)\) comparisons (constant-width scoring + select)</td>
             </tr>
           </tbody>
         </table>
-        <p>When the scoring cost is genuinely small, the quadratic interaction term changes from \(n^2 d\) to \(B n^2\), which is a factor of roughly \(d / B\) in that part of the layer (assuming \(B \ll d\)).</p>
-        <p>To reduce \(n d^2\) further, you would still need sparsity, low-rank factors, or routing; tournaments do not remove dense projections by themselves.</p>
+        <p>Relative to standard attention’s \(O(n^2 d)\), LCD tournaments reduce the quadratic interaction cost to \(O(B n^2)\), which is roughly a factor of \(d / B\) fewer scalar ops in that term when \(B \ll d\).</p>
+        <p>In this framing the remaining per-token work is \(O(n)\) (constant-width ops and memory traffic), so the tournament dominates at long context.</p>
       </section>
 
       <section id="energy">
@@ -287,6 +301,22 @@ b & \frac{s_b}{s_a + \epsilon} \ge \tau \\
           <li>Optimization stability: hard selection can create sparse or discontinuous gradients unless relaxed or trained carefully.</li>
           <li>Hardware reality: if tournaments become branchy, memory-heavy, or poorly vectorized, they can be slower and less efficient than dense kernels.</li>
         </ul>
+      </section>
+
+      <section id="agi">
+        <h2>Why This Might Be Closer to AGI (Conceptually)</h2>
+        <p>AGI is a broad and controversial target, but one useful framing is that general intelligence is less about exhaustive processing and more about selective, context-dependent use of information.</p>
+        <ul>
+          <li><strong>Relevance over coverage:</strong> instead of integrating everything, the model tries to identify what matters in the current context and ignore the rest.</li>
+          <li><strong>Contextual sufficiency:</strong> “understanding” can be operationalized as finding a subset of evidence that is sufficient for correct behavior, not constructing a maximally detailed internal summary.</li>
+          <li><strong>Ambiguity tolerance:</strong> bootstrapped tournaments allow multiple randomized reductions; confidence comes from stability across perturbations rather than one deterministic explanation.</li>
+          <li><strong>Stability as a signal:</strong> if small, irrelevant changes in input don’t change the selected support, that looks more like an invariant “intent” than pure surface-form matching.</li>
+        </ul>
+        <div class="callout compact">
+          <p><strong>A safe claim (no hype)</strong></p>
+          <p>General intelligence does not require exhaustive integration of all details, but the ability to identify and rely on what matters in a given context. Salience-gated selection models this by estimating outcome-conditioned influence and routing only the most supported evidence.</p>
+        </div>
+        <p><strong>Honesty clause:</strong> this does not “solve AGI.” It also biases away from tasks that truly require many weak cues to accumulate or long chains of precise reasoning. A plausible AGI-like system may need multiple regimes: selective routing by default, and more exhaustive computation only when needed.</p>
       </section>
 
       <section id="experiments">
